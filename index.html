@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Advanced Dynamic Tree Diagram</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            background-color: #121212;
+            color: #ffffff;
+        }
+        #toolbox {
+            width: 250px;
+            padding: 20px;
+            background-color: #1e1e1e;
+            border-right: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+        }
+        #canvasContainer {
+            flex-grow: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+        }
+        .button {
+            padding: 10px 15px;
+            background-color: #2c2c2c;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin: 5px 0;
+            width: 100%;
+        }
+        .button:hover {
+            background-color: #3c3c3c;
+        }
+        .button:disabled {
+            background-color: #1c1c1c;
+            cursor: not-allowed;
+        }
+        #shapeSelector, #colorPicker, #sizeSlider {
+            margin-top: 15px;
+        }
+        #colorPicker input, #sizeSlider input {
+            width: 100%;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        #undoRedoPanel, #zoomPanel {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+        }
+        #undoRedoPanel .button, #zoomPanel .button {
+            width: 48%;
+        }
+        #popup {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #2c2c2c;
+            padding: 20px;
+            border-radius: 5px;
+            z-index: 1000;
+        }
+        #popup input {
+            width: 100%;
+            padding: 5px;
+            margin-bottom: 10px;
+        }
+        #popup button {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="toolbox">
+        <button id="addNodeBtn" class="button">Add Node</button>
+        <button id="saveBtn" class="button">Save</button>
+        <input type="file" id="loadFile" style="display: none;" accept=".json">
+        <button id="loadBtn" class="button">Load</button>
+        <button id="exportPNGBtn" class="button">Export PNG</button>
+        <button id="exportSVGBtn" class="button">Export SVG</button>
+        <button id="exportJSONBtn" class="button">Export JSON</button>
+        <div id="shapeSelector">
+            <label>Node Shape:</label>
+            <label><input type="radio" name="shape" value="circle" checked /> Circle</label>
+            <label><input type="radio" name="shape" value="square" /> Square</label>
+            <label><input type="radio" name="shape" value="rectangle" /> Rectangle</label>
+        </div>
+        <div id="colorPicker">
+            <label>Node Color:</label>
+            <input type="color" id="nodeColor" value="#3498db">
+        </div>
+        <div id="sizeSlider">
+            <label>Node Size:</label>
+            <input type="range" id="nodeSize" min="30" max="100" value="60">
+        </div>
+        <div id="undoRedoPanel">
+            <button id="undoBtn" class="button">Undo</button>
+            <button id="redoBtn" class="button">Redo</button>
+        </div>
+        <div id="zoomPanel">
+            <button id="zoomInBtn" class="button">+</button>
+            <button id="zoomOutBtn" class="button">-</button>
+        </div>
+        <button id="resetZoomBtn" class="button">Reset Zoom</button>
+    </div>
+    <div id="canvasContainer">
+        <canvas id="treeCanvas"></canvas>
+    </div>
+    <div id="popup">
+        <input type="text" id="nodeValueInput" placeholder="Enter node value">
+        <button id="saveNodeBtn" class="button">Save</button>
+        <button id="cancelNodeBtn" class="button">Cancel</button>
+    </div>
+    <script>
+        const canvas = document.getElementById("treeCanvas");
+        const ctx = canvas.getContext("2d");
+        const addNodeBtn = document.getElementById("addNodeBtn");
+        const saveBtn = document.getElementById("saveBtn");
+        const loadBtn = document.getElementById("loadBtn");
+        const exportPNGBtn = document.getElementById("exportPNGBtn");
+        const exportSVGBtn = document.getElementById("exportSVGBtn");
+        const exportJSONBtn = document.getElementById("exportJSONBtn");
+        const shapeSelector = document.getElementById("shapeSelector");
+        const nodeColorPicker = document.getElementById("nodeColor");
+        const nodeSizeSlider = document.getElementById("nodeSize");
+        const undoBtn = document.getElementById("undoBtn");
+        const redoBtn = document.getElementById("redoBtn");
+        const zoomInBtn = document.getElementById("zoomInBtn");
+        const zoomOutBtn = document.getElementById("zoomOutBtn");
+        const resetZoomBtn = document.getElementById("resetZoomBtn");
+        const popup = document.getElementById("popup");
+        const nodeValueInput = document.getElementById("nodeValueInput");
+        const saveNodeBtn = document.getElementById("saveNodeBtn");
+        const cancelNodeBtn = document.getElementById("cancelNodeBtn");
+
+        let nodes = [];
+        let connections = [];
+        let draggingNode = null;
+        let draggingConnection = null;
+        let draggingArrowhead = null;
+        let editingNode = null;
+        let undoStack = [];
+        let redoStack = [];
+        let zoomLevel = 1;
+        let panOffset = { x: 0, y: 0 };
+
+        class Node {
+            constructor(x, y, value, shape = "circle", color = "#3498db", size = 60) {
+                this.x = x;
+                this.y = y;
+                this.value = value;
+                this.shape = shape;
+                this.color = color;
+                this.width = size;
+                this.height = shape === "rectangle" ? size * 2/3 : size;
+                this.id = Date.now() + Math.random();
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.strokeStyle = "#2980b9";
+                ctx.lineWidth = 2;
+
+                if (this.shape === "circle") {
+                    ctx.beginPath();
+                    ctx.arc(this.x, this.y, this.width / 2, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                } else if (this.shape === "square") {
+                    ctx.fillRect(this.x - this.width / 2, this.y - this.width / 2, this.width, this.width);
+                    ctx.strokeRect(this.x - this.width / 2, this.y - this.width / 2, this.width, this.width);
+                } else if (this.shape === "rectangle") {
+                    ctx.fillRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
+                    ctx.strokeRect(this.x - this.width / 2, this.y - this.height / 2, this.width, this.height);
+                }
+
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 14px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(this.value, this.x, this.y);
+            }
+
+            isPointInside(x, y) {
+                if (this.shape === "circle") {
+                    return Math.sqrt((x - this.x) ** 2 + (y - this.y) ** 2) <= this.width / 2;
+                } else if (this.shape === "square" || this.shape === "rectangle") {
+                    return x >= this.x - this.width / 2 && x <= this.x + this.width / 2 &&
+                           y >= this.y - this.height / 2 && y <= this.y + this.height / 2;
+                }
+            }
+        }
+
+        function drawArrowhead(tox, toy, angle) {
+            const headlen = 15;
+            ctx.beginPath();
+            ctx.moveTo(tox, toy);
+            ctx.lineTo(tox - headlen * Math.cos(angle - Math.PI / 6), toy - headlen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(tox - headlen * Math.cos(angle + Math.PI / 6), toy - headlen * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fillStyle = "#fff";
+            ctx.fill();
+            ctx.strokeStyle = "#2980b9";
+            ctx.stroke();
+        }
+
+        function calculateEndpoint(startX, startY, endX, endY, endNode) {
+            const angle = Math.atan2(endY - startY, endX - startX);
+            let distanceToEdge;
+
+            if (endNode.shape === "circle") {
+                distanceToEdge = endNode.width / 2;
+            } else if (endNode.shape === "square") {
+                const dx = Math.abs(Math.cos(angle));
+                const dy = Math.abs(Math.sin(angle));
+                distanceToEdge = endNode.width / 2 / Math.max(dx, dy);
+            } else if (endNode.shape === "rectangle") {
+                const dx = Math.abs(Math.cos(angle));
+                const dy = Math.abs(Math.sin(angle));
+                distanceToEdge = Math.min(endNode.width / 2 / dx, endNode.height / 2 / dy);
+            }
+
+            return {
+                x: endNode.x - Math.cos(angle) * distanceToEdge,
+                y: endNode.y - Math.sin(angle) * distanceToEdge,
+            };
+        }
+
+        function drawDynamicSCurve(startX, startY, endX, endY, startNode, endNode, bidirectional = false) {
+            let startEndpoint = startNode ? calculateEndpoint(endX, endY, startX, startY, startNode) : { x: startX, y: startY };
+            let endEndpoint = endNode ? calculateEndpoint(startX, startY, endX, endY, endNode) : { x: endX, y: endY };
+            const dx = endEndpoint.x - startEndpoint.x;
+            const dy = endEndpoint.y - startEndpoint.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            const midX = (startEndpoint.x + endEndpoint.x) / 2;
+            const midY = (startEndpoint.y + endEndpoint.y) / 2;
+
+            const curveFactor = Math.min(0.5, 100 / distance);
+            const controlPoint1X = midX - dy * curveFactor;
+            const controlPoint1Y = midY + dx * curveFactor;
+            const controlPoint2X = midX + dy * curveFactor;
+            const controlPoint2Y = midY - dx * curveFactor;
+
+            ctx.beginPath();
+            ctx.moveTo(startEndpoint.x, startEndpoint.y);
+            ctx.bezierCurveTo(controlPoint1X, controlPoint1Y, controlPoint2X, controlPoint2Y, endEndpoint.x, endEndpoint.y);
+            ctx.strokeStyle = "#3498db";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            const startAngle = Math.atan2(controlPoint1Y - startEndpoint.y, controlPoint1X - startEndpoint.x);
+            const endAngle = Math.atan2(endEndpoint.y - controlPoint2Y, endEndpoint.x - controlPoint2X);
+
+            drawArrowhead(endEndpoint.x, endEndpoint.y, endAngle);
+            if (bidirectional) {
+                drawArrowhead(startEndpoint.x, startEndpoint.y, startAngle + Math.PI);
+            }
+        }
+
+        function redraw() {
+            canvas.width = canvasContainer.clientWidth;
+            canvas.height = canvasContainer.clientHeight;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "#121212";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            ctx.translate(panOffset.x, panOffset.y);
+            ctx.scale(zoomLevel, zoomLevel);
+
+            const connectionMap = new Map();
+
+            connections.forEach((conn) => {
+                const key = `${Math.min(conn.start.id, conn.end.id)}-${Math.max(conn.start.id, conn.end.id)}`;
+                if (connectionMap.has(key)) {
+                    connectionMap.get(key).bidirectional = true;
+                } else {
+                    connectionMap.set(key, { ...conn, bidirectional: false });
+                }
+            });
+
+            connectionMap.forEach((conn) => {
+                drawDynamicSCurve(conn.start.x, conn.start.y, conn.end.x, conn.end.y, conn.start, conn.end, conn.bidirectional);
+            });
+
+            nodes.forEach((node) => node.draw());
+
+            if (draggingConnection) {
+                drawDynamicSCurve(draggingConnection.start.x, draggingConnection.start.y, draggingConnection.endX, draggingConnection.endY, draggingConnection.start, null);
+            }
+
+            ctx.restore();
+        }
+
+        function showPopup(x, y, value = '') {
+            popup.style.display = 'block';
+            nodeValueInput.value = value;
+            nodeValueInput.focus();
+        }
+
+        function hidePopup() {
+            popup.style.display = 'none';
+        }
+
+        function addNode() {
+            showPopup();
+            editingNode = null;
+        }
+
+        function findNodeAtPoint(x, y) {
+            const scaledX = (x - panOffset.x) / zoomLevel;
+            const scaledY = (y - panOffset.y) / zoomLevel;
+            return nodes.find((node) => node.isPointInside(scaledX, scaledY));
+        }
+
+        function findConnectionAtPoint(x, y) {
+            const scaledX = (x - panOffset.x) / zoomLevel;
+            const scaledY = (y - panOffset.y) / zoomLevel;
+            for (let conn of connections) {
+                const dx = conn.end.x - conn.start.x;
+                const dy = conn.end.y - conn.start.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                const t = ((scaledX - conn.start.x) * dx + (scaledY - conn.start.y) * dy) / (distance * distance);
+
+                if (t >= 0 && t <= 1) {
+                    const closestX = conn.start.x + t * dx;
+                    const closestY = conn.start.y + t * dy;
+                    const distToLine = Math.sqrt((scaledX - closestX) ** 2 + (scaledY - closestY) ** 2);
+
+                    if (distToLine < 10 / zoomLevel) {
+                        return { connection: conn, t: t };
+                    }
+                }
+            }
+            return null;
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const clickedNode = findNodeAtPoint(x, y);
+
+            if (clickedNode && e.ctrlKey) {
+                draggingConnection = { start: clickedNode, endX: x, endY: y };
+            } else if (clickedNode) {
+                if (e.shiftKey) {
+                    startNodeEdit(clickedNode);
+                } else {
+                    draggingNode = clickedNode;
+                }
+            } else {
+                const clickedConnection = findConnectionAtPoint(x, y);
+                if (clickedConnection && clickedConnection.t > 0.9) {
+                    draggingArrowhead = clickedConnection.connection;
+                } else {
+                    panStart = { x: e.clientX, y: e.clientY };
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            if (draggingNode) {
+                draggingNode.x = (x - panOffset.x) / zoomLevel;
+                draggingNode.y = (y - panOffset.y) / zoomLevel;
+            } else if (draggingConnection) {
+                draggingConnection.endX = (x - panOffset.x) / zoomLevel;
+                draggingConnection.endY = (y - panOffset.y) / zoomLevel;
+            } else if (draggingArrowhead) {
+                draggingArrowhead.end.x = (x - panOffset.x) / zoomLevel;
+                draggingArrowhead.end.y = (y - panOffset.y) / zoomLevel;
+            } else if (panStart) {
+                panOffset.x += e.clientX - panStart.x;
+                panOffset.y += e.clientY - panStart.y;
+                panStart = { x: e.clientX, y: e.clientY };
+            }
+            redraw();
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const endNode = findNodeAtPoint(x, y);
+
+            if (draggingConnection && endNode && endNode !== draggingConnection.start) {
+                connections.push({ start: draggingConnection.start, end: endNode });
+                saveState();
+            } else if (draggingArrowhead && endNode && endNode !== draggingArrowhead.start) {
+                draggingArrowhead.end = endNode;
+                saveState();
+            } else if (draggingNode) {
+                saveState();
+            }
+
+            draggingNode = null;
+            draggingConnection = null;
+            draggingArrowhead = null;
+            panStart = null;
+            redraw();
+        });
+
+        canvas.addEventListener('dblclick', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const clickedNode = findNodeAtPoint(x, y);
+
+            if (clickedNode) {
+                startNodeEdit(clickedNode);
+            } else {
+                const newX = (x - panOffset.x) / zoomLevel;
+                const newY = (y - panOffset.y) / zoomLevel;
+                showPopup(newX, newY);
+            }
+        });
+
+        function startNodeEdit(node) {
+            editingNode = node;
+            showPopup(node.x, node.y, node.value);
+        }
+
+        function saveState() {
+            undoStack.push(JSON.stringify({ nodes, connections }));
+            redoStack = [];
+            updateUndoRedoButtons();
+        }
+
+        function undo() {
+            if (undoStack.length > 1) {
+                redoStack.push(undoStack.pop());
+                const previousState = JSON.parse(undoStack[undoStack.length - 1]);
+                nodes = previousState.nodes.map(n => Object.assign(new Node(), n));
+                connections = previousState.connections.map(c => ({
+                    start: nodes.find(n => n.id === c.start.id),
+                    end: nodes.find(n => n.id === c.end.id)
+                }));
+                updateUndoRedoButtons();
+                redraw();
+            }
+        }
+
+        function redo() {
+            if (redoStack.length > 0) {
+                const nextState = JSON.parse(redoStack.pop());
+                undoStack.push(JSON.stringify({ nodes, connections }));
+                nodes = nextState.nodes.map(n => Object.assign(new Node(), n));
+                connections = nextState.connections.map(c => ({
+                    start: nodes.find(n => n.id === c.start.id),
+                    end: nodes.find(n => n.id === c.end.id)
+                }));
+                updateUndoRedoButtons();
+                redraw();
+            }
+        }
+
+        function updateUndoRedoButtons() {
+            undoBtn.disabled = undoStack.length <= 1;
+            redoBtn.disabled = redoStack.length === 0;
+        }
+
+        function zoomIn() {
+            zoomLevel *= 1.1;
+            redraw();
+        }
+
+        function zoomOut() {
+            zoomLevel /= 1.1;
+            redraw();
+        }
+
+        function resetZoom() {
+            zoomLevel = 1;
+            panOffset = { x: 0, y: 0 };
+            redraw();
+        }
+
+        function saveDiagram() {
+            const data = JSON.stringify({ nodes, connections });
+            const blob = new Blob([data], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = 'tree_diagram.json';
+            link.href = url;
+            link.click();
+        }
+
+        function loadDiagram() {
+            document.getElementById('loadFile').click();
+        }
+
+        document.getElementById('loadFile').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const parsed = JSON.parse(e.target.result);
+                        nodes = parsed.nodes.map(n => Object.assign(new Node(), n));
+                        connections = parsed.connections.map(c => ({
+                            start: nodes.find(n => n.id === c.start.id),
+                            end: nodes.find(n => n.id === c.end.id)
+                        }));
+                        saveState();
+                        redraw();
+                        alert('Diagram loaded successfully!');
+                    } catch (error) {
+                        alert('Error loading diagram: ' + error.message);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        function exportAsPNG() {
+            const dataURL = canvas.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.download = 'tree_diagram.png';
+            link.href = dataURL;
+            link.click();
+        }
+
+        function exportAsSVG() {
+            const svgNamespace = "http://www.w3.org/2000/svg";
+            const svg = document.createElementNS(svgNamespace, "svg");
+            svg.setAttribute("width", canvas.width);
+            svg.setAttribute("height", canvas.height);
+
+            // Create background
+            const background = document.createElementNS(svgNamespace, "rect");
+            background.setAttribute("width", "100%");
+            background.setAttribute("height", "100%");
+            background.setAttribute("fill", "#121212");
+            svg.appendChild(background);
+
+            // Draw connections
+            connections.forEach(conn => {
+                const path = document.createElementNS(svgNamespace, "path");
+                const startPoint = `M${conn.start.x},${conn.start.y}`;
+                const endPoint = `L${conn.end.x},${conn.end.y}`;
+                path.setAttribute("d", `${startPoint} ${endPoint}`);
+                path.setAttribute("stroke", "#3498db");
+                path.setAttribute("stroke-width", "2");
+                path.setAttribute("fill", "none");
+                svg.appendChild(path);
+            });
+
+            // Draw nodes
+            nodes.forEach(node => {
+                let shape;
+                if (node.shape === "circle") {
+                    shape = document.createElementNS(svgNamespace, "circle");
+                    shape.setAttribute("cx", node.x);
+                    shape.setAttribute("cy", node.y);
+                    shape.setAttribute("r", node.width / 2);
+                } else {
+                    shape = document.createElementNS(svgNamespace, "rect");
+                    shape.setAttribute("x", node.x - node.width / 2);
+                    shape.setAttribute("y", node.y - node.height / 2);
+                    shape.setAttribute("width", node.width);
+                    shape.setAttribute("height", node.height);
+                    if (node.shape === "square") {
+                        shape.setAttribute("height", node.width);
+                    }
+                }
+                shape.setAttribute("fill", node.color);
+                shape.setAttribute("stroke", "#2980b9");
+                shape.setAttribute("stroke-width", "2");
+                svg.appendChild(shape);
+
+                const text = document.createElementNS(svgNamespace, "text");
+                text.setAttribute("x", node.x);
+                text.setAttribute("y", node.y);
+                text.setAttribute("text-anchor", "middle");
+                text.setAttribute("dominant-baseline", "central");
+                text.setAttribute("fill", "#ffffff");
+                text.setAttribute("font-family", "Arial");
+                text.setAttribute("font-size", "14px");
+                text.setAttribute("font-weight", "bold");
+                text.textContent = node.value;
+                svg.appendChild(text);
+            });
+
+            const svgData = new XMLSerializer().serializeToString(svg);
+            const svgBlob = new Blob([svgData], {type: "image/svg+xml;charset=utf-8"});
+            const svgUrl = URL.createObjectURL(svgBlob);
+            const downloadLink = document.createElement("a");
+            downloadLink.href = svgUrl;
+            downloadLink.download = "tree_diagram.svg";
+            document.body.appendChild(downloadLink);
+            downloadLink.click();
+            document.body.removeChild(downloadLink);
+        }
+
+        function exportAsJSON() {
+            const data = JSON.stringify({ nodes, connections }, null, 2);
+            const blob = new Blob([data], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = 'tree_diagram.json';
+            link.href = url;
+            link.click();
+        }
+
+        addNodeBtn.addEventListener('click', addNode);
+        saveBtn.addEventListener('click', saveDiagram);
+        loadBtn.addEventListener('click', loadDiagram);
+        exportPNGBtn.addEventListener('click', exportAsPNG);
+        exportSVGBtn.addEventListener('click', exportAsSVG);
+        exportJSONBtn.addEventListener('click', exportAsJSON);
+        undoBtn.addEventListener('click', undo);
+        redoBtn.addEventListener('click', redo);
+        zoomInBtn.addEventListener('click', zoomIn);
+        zoomOutBtn.addEventListener('click', zoomOut);
+        resetZoomBtn.addEventListener('click', resetZoom);
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const zoom = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+            zoomLevel *= zoom;
+
+            panOffset.x = mouseX - (mouseX - panOffset.x) * zoom;
+            panOffset.y = mouseY - (mouseY - panOffset.y) * zoom;
+
+            redraw();
+        });
+
+        nodeColorPicker.addEventListener('change', () => {
+            if (draggingNode) {
+                draggingNode.color = nodeColorPicker.value;
+                redraw();
+            }
+        });
+
+        nodeSizeSlider.addEventListener('input', () => {
+            if (draggingNode) {
+                const size = parseInt(nodeSizeSlider.value);
+                draggingNode.width = size;
+                draggingNode.height = draggingNode.shape === "rectangle" ? size * 2/3 : size;
+                redraw();
+            }
+        });
+
+        function resizeCanvas() {
+            canvas.width = canvasContainer.clientWidth;
+            canvas.height = canvasContainer.clientHeight;
+            redraw();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        saveNodeBtn.addEventListener('click', () => {
+            const value = nodeValueInput.value.trim();
+            if (value) {
+                if (editingNode) {
+                    editingNode.value = value;
+                } else {
+                    const shape = document.querySelector('input[name="shape"]:checked').value;
+                    const color = nodeColorPicker.value;
+                    const size = parseInt(nodeSizeSlider.value);
+                    const newNode = new Node(
+                        (popup.offsetLeft - panOffset.x) / zoomLevel,
+                        (popup.offsetTop - panOffset.y) / zoomLevel,
+                        value, shape, color, size
+                    );
+                    nodes.push(newNode);
+                }
+                saveState();
+                redraw();
+            }
+            hidePopup();
+        });
+
+        cancelNodeBtn.addEventListener('click', hidePopup);
+
+        saveState();
+        updateUndoRedoButtons();
+        resizeCanvas();
+    </script>
+</body>
+</html>
